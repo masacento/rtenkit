@@ -191,91 +191,66 @@ pub extern "C" fn embeddings_free(ptr: *mut Embeddings) {
     }
 }
 
-/// Computes embeddings for a batch of token ID sequences.
+/// Computes embeddings for a single token ID sequence.
 ///
 /// # Safety
 /// - `ptr` must be a valid pointer to an Embeddings instance obtained from `embeddings_new`.
-/// - `input_ids_ptr` must be a valid pointer to an array of `count` pointers, where each
-///   pointer points to an array of i32 token IDs.
-/// - `lengths_ptr` must be a valid pointer to an array of `count` usize values, indicating
-///   the length of each corresponding token ID array.
-/// - All memory pointed to by these pointers must be valid for the duration of the call.
+/// - `ids_ptr` must be a valid pointer to an array of `len` i32 token IDs.
+/// - The memory pointed to by `ptr` and `ids_ptr` must be valid for the duration of the call.
 /// - `out_ptr`, `out_count_ptr`, `out_dim_ptr` must be valid pointers to `*mut f32`, `usize`, `usize`.
 ///
 /// # Returns
 /// Returns 0 on success, -1 on error.
-/// On success, `out_ptr` points to a flat f32 array containing the embeddings
-/// (batch_size * embedding_dim elements). `out_count_ptr` contains the batch size,
+/// On success, `out_ptr` points to a flat f32 array containing the embedding vector
+/// for the input sequence. `out_count_ptr` will contain 1 (the batch size, which is always 1),
 /// and `out_dim_ptr` contains the embedding dimension.
 /// The caller is responsible for freeing the memory pointed to by `out_ptr`
-/// using `dealloc_f32` with the pointer and the total number of elements (`batch_size * embedding_dim`).
+/// using `dealloc_f32` with the pointer and the total number of elements (`1 * out_dim_ptr`, which is just `out_dim_ptr`).
 #[no_mangle]
 pub extern "C" fn embeddings_embed(
     ptr: *mut Embeddings,
-    input_ids_ptr: *const *const i32,
-    lengths_ptr: *const usize,
-    count: usize, // batch size
+    ids_ptr: *const i32,
+    len: usize,
     out_ptr: *mut *mut f32,
     out_count_ptr: *mut usize,
     out_dim_ptr: *mut usize,
 ) -> i32 {
     if ptr.is_null()
-        || input_ids_ptr.is_null()
-        || lengths_ptr.is_null()
+        || ids_ptr.is_null()
         || out_ptr.is_null()
         || out_count_ptr.is_null()
         || out_dim_ptr.is_null()
     {
         return -1;
     }
-
-    // SAFETY: Assumes `ptr` is a valid Embeddings pointer.
+    // SAFETY: ids_ptr is valid for len elements
     let embedder = unsafe { &*ptr };
-    // SAFETY: Assumes `input_ids_ptr` points to `count` valid `*const i32` pointers,
-    //         and `lengths_ptr` points to `count` valid `usize` lengths.
-    let id_ptrs = unsafe { slice::from_raw_parts(input_ids_ptr, count) };
-    let len_ptrs = unsafe { slice::from_raw_parts(lengths_ptr, count) };
-
-    // Copy input data from C pointers into Rust Vecs.
-    let mut input_ids: Vec<Vec<i32>> = Vec::with_capacity(count);
-    for i in 0..count {
-        // SAFETY: Assumes `id_ptrs[i]` is valid for `len_ptrs[i]` i32s.
-        let ids_slice = unsafe { slice::from_raw_parts(id_ptrs[i], len_ptrs[i]) };
-        // i32 is Copy, so `to_vec` is efficient.
-        input_ids.push(ids_slice.to_vec());
-    }
-
-    match embedder.embed(input_ids) {
+    let ids_slice = unsafe { slice::from_raw_parts(ids_ptr, len) };
+    match embedder.embed(vec![ids_slice.to_vec()]) {
         Ok(result_vecs) => {
             let batch = result_vecs.len();
-            // Determine dimension, handle case where result might be empty.
             let dim = if batch > 0 { result_vecs[0].len() } else { 0 };
-            let total_len = batch * dim;
-
-            // Flatten the Vec<Vec<f32>> into a single Vec<f32>.
-            let mut flat_vec: Vec<f32> = Vec::with_capacity(total_len);
-            for vec in result_vecs.iter() {
-                // Ensure consistency in dimensions if batch > 0
-                if vec.len() != dim {
-                    return -1; // Inconsistent embedding dimensions
+            let total = batch * dim;
+            // Flatten
+            let mut flat_vec: Vec<f32> = Vec::with_capacity(total);
+            for v in result_vecs.iter() {
+                if v.len() != dim {
+                    return -1; // inconsistent dims
                 }
-                flat_vec.extend_from_slice(vec);
+                flat_vec.extend_from_slice(v);
             }
-
             let mut boxed = flat_vec.into_boxed_slice();
             let ptr_out = boxed.as_mut_ptr();
-            // Transfer ownership to C caller.
             mem::forget(boxed);
-
-            // SAFETY: Assumes output pointers are valid.
+            // Write outputs
             unsafe {
                 *out_count_ptr = batch;
                 *out_dim_ptr = dim;
                 *out_ptr = ptr_out;
             }
-            0 // Success
+            0
         }
-        Err(_) => -1, // Embedding error
+        Err(_) => -1,
     }
 }
 
@@ -361,54 +336,5 @@ pub extern "C" fn dealloc_f32(ptr: *mut f32, len: usize) {
     //         from the raw parts and allowing it to be dropped.
     unsafe {
         Vec::from_raw_parts(ptr, 0, len);
-    }
-}
-
-// Add a single-sequence embedding function to avoid double pointer for cgo
-#[no_mangle]
-pub extern "C" fn embeddings_embed_one(
-    ptr: *mut Embeddings,
-    ids_ptr: *const i32,
-    len: usize,
-    out_ptr: *mut *mut f32,
-    out_count_ptr: *mut usize,
-    out_dim_ptr: *mut usize,
-) -> i32 {
-    if ptr.is_null()
-        || ids_ptr.is_null()
-        || out_ptr.is_null()
-        || out_count_ptr.is_null()
-        || out_dim_ptr.is_null()
-    {
-        return -1;
-    }
-    // SAFETY: ids_ptr is valid for len elements
-    let embedder = unsafe { &*ptr };
-    let ids_slice = unsafe { slice::from_raw_parts(ids_ptr, len) };
-    match embedder.embed(vec![ids_slice.to_vec()]) {
-        Ok(result_vecs) => {
-            let batch = result_vecs.len();
-            let dim = if batch > 0 { result_vecs[0].len() } else { 0 };
-            let total = batch * dim;
-            // Flatten
-            let mut flat_vec: Vec<f32> = Vec::with_capacity(total);
-            for v in result_vecs.iter() {
-                if v.len() != dim {
-                    return -1; // inconsistent dims
-                }
-                flat_vec.extend_from_slice(v);
-            }
-            let mut boxed = flat_vec.into_boxed_slice();
-            let ptr_out = boxed.as_mut_ptr();
-            mem::forget(boxed);
-            // Write outputs
-            unsafe {
-                *out_count_ptr = batch;
-                *out_dim_ptr = dim;
-                *out_ptr = ptr_out;
-            }
-            0
-        }
-        Err(_) => -1,
     }
 }

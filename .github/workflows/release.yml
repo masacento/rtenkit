@@ -22,6 +22,8 @@ jobs:
             target: x86_64-pc-windows-gnu
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Cache Cargo registry + git
         uses: actions/cache@v4
@@ -127,6 +129,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
+          draft: false
           files: |
             ${{ github.workspace }}/zips/*.zip
           fail_on_unmatched_files: true
