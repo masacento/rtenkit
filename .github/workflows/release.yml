@@ -1,0 +1,132 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux-windows:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - name: linux-amd64
+            target: x86_64-unknown-linux-musl
+          - name: linux-arm64
+            target: aarch64-unknown-linux-musl
+          - name: windows-amd64
+            target: x86_64-pc-windows-gnu
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Cargo registry + git
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Add target & install cross
+        run: |
+          rustup target add ${{ matrix.target }}
+          cargo install cross --version 0.2.4 --force --locked
+
+      - name: Cross build (release)
+        run: |
+          export RUSTFLAGS="-C target-feature=-crt-static"
+          cross build --release --target ${{ matrix.target }}
+
+      - name: Strip binaries
+        run: |
+          find target/${{ matrix.target }}/release -type f \
+            \( -name '*.so' -o -name '*.a' -o -name '*.dll' -o -perm /u=x \) \
+            -print0 \
+          | xargs -0 -n1 strip --strip-all || true
+
+      - name: Upload Linux/Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtenkit-${{ matrix.name }}
+          path: |
+            target/${{ matrix.target }}/release/librtenkit.a
+            target/${{ matrix.target }}/release/librtenkit.so
+            target/${{ matrix.target }}/release/rtenkit.dll
+            target/${{ matrix.target }}/release/rtenkit.lib
+
+  build-darwin:
+    runs-on: macos-14
+    strategy:
+      matrix:
+        include:
+          - name: darwin-amd64
+            target: x86_64-apple-darwin
+          - name: darwin-arm64
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Cargo registry + git
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: macos-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build (release)
+        run: |
+          cargo build --release --target ${{ matrix.target }}
+
+      - name: Strip binaries
+        run: |
+          find target/${{ matrix.target }}/release -type f \
+            \( -name '*.dylib' -o -name '*.a' \) \
+            -print0 \
+          | xargs -0 -n1 strip -x || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtenkit-${{ matrix.name }}
+          path: |
+            target/${{ matrix.target }}/release/librtenkit.dylib
+            target/${{ matrix.target }}/release/librtenkit.a
+
+  release:
+    needs:
+      - build-linux-windows
+      - build-darwin
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Package per-environment ZIPs
+        run: |
+          mkdir -p zips
+          cd artifacts
+          for envdir in */; do
+            zip -r "../zips/${envdir%/}.zip" "$envdir"
+          done
+        shell: bash
+
+      - name: Create GitHub Release and Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          files: |
+            ${{ github.workspace }}/zips/*.zip
+          fail_on_unmatched_files: true
