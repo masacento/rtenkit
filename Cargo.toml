@@ -9,12 +9,13 @@ path = "src/lib.rs"
 crate-type = ["cdylib","staticlib"]
 
 [profile.release]
-opt-level = "z"
+opt-level = 3
 lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = "symbols" 
 debug = false
+rpath = false
 
 [dependencies]
 rten = {git = "https://github.com/robertknight/rten.git", rev = "0ecfe778bc123cc41b7c614c10486ee2cc87a972" }
