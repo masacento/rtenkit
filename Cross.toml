@@ -8,8 +8,20 @@ passthrough = [
 ]
 
 [target.x86_64-unknown-linux-musl]
+zig = true
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = [
+  "-C", "link-arg=-lm", "target-feature=+crt-static"
+]
 
 [target.aarch64-unknown-linux-musl]
+zig = true
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = [
+  "-C", "link-arg=-lm", "target-feature=+crt-static"
+]
 
 [target.x86_64-apple-darwin]
 runner = "native"

@@ -14,9 +14,13 @@ jobs:
     strategy:
       matrix:
         include:
-          - name: linux-amd64
+          - name: linux-amd64-dynamic
+            target: x86_64-unknown-linux-gnu
+          - name: linux-arm64-dynamic
+            target: aarch64-unknown-linux-gnu
+          - name: linux-amd64-static
             target: x86_64-unknown-linux-musl
-          - name: linux-arm64
+          - name: linux-arm64-static
             target: aarch64-unknown-linux-musl
           - name: windows-amd64
             target: x86_64-pc-windows-gnu
@@ -41,26 +45,19 @@ jobs:
 
       - name: Cross build (release)
         run: |
-          export RUSTFLAGS="-C target-feature=-crt-static"
           cross build --release --target ${{ matrix.target }}
-
-      - name: Strip binaries
-        run: |
-          find target/${{ matrix.target }}/release -type f \
-            \( -name '*.so' -o -name '*.a' -o -name '*.dll' -o -perm /u=x \) \
-            -print0 \
-          | xargs -0 -n1 strip --strip-all || true
 
       - name: Upload Linux/Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: rtenkit-${{ matrix.name }}
           path: |
-            target/${{ matrix.target }}/release/librtenkit.a
-            target/${{ matrix.target }}/release/librtenkit.so
-            target/${{ matrix.target }}/release/rtenkit.dll
-            target/${{ matrix.target }}/release/rtenkit.lib
-
+            target/x86_64-unknown-linux-gnu/release/librtenkit.so
+            target/x86_64-unknown-linux-musl/release/librtenkit.a
+            target/aarch64-unknown-linux-gnu/release/librtenkit.so
+            target/aarch64-unknown-linux-musl/release/librtenkit.a
+            target/x86_64-pc-windows-gnu/release/rtenkit.dll
+            target/x86_64-pc-windows-gnu/release/librtenkit.a
   build-darwin:
     runs-on: macos-14
     strategy:
